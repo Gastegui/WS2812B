@@ -4,3 +4,6 @@ sdkconfig
 sdkconfig.old
 main/secrets.h
 transmitter/transmitter
+transmitter/cava_c
+transmitter/cava_c2
+transmitter/nonstop

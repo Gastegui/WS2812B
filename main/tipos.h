@@ -68,6 +68,7 @@ struct PARAMS_ARCOIRIS
 };
 
 #define PIXEL_PACKED_SIZE 37
+#define TCP_PIXEL_SIZE (PIXEL_PACKED_SIZE + 2)
 struct PIXEL
 {
     struct COLOR color;
@@ -90,5 +91,13 @@ struct PIXEL_QUEUE{
     uint16_t num;
     struct PIXEL pixel;
 };
+
+enum INTERRUPT_STATE: uint8_t
+{
+    NOTHING,
+    STARTED,
+    READABLE
+};
+
 
 #endif

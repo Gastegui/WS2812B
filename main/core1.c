@@ -1,17 +1,17 @@
 #include <stdint.h>
 #include <string.h>
 #include <math.h>
-#include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
-#include "esp_log.h"
 #include "driver/rmt_tx.h"
+#include "driver/gpio.h"
+#include "esp_log.h"
+#include "esp_timer.h"
 
 #include "core1.h"
 #include "globales.h"
+#include "hal/gpio_types.h"
 #include "tipos.h"
-
-
 
 
 
@@ -54,6 +54,35 @@ static const rmt_symbol_word_t ws2812_reset = {
     .level1 = 0,
     .duration1 = RMT_LED_STRIP_RESOLUTION_HZ / 1000000 * 50 / 2,
 };
+
+esp_timer_handle_t opto_timer;
+volatile uint8_t interrupt_pulses = 0;
+volatile enum INTERRUPT_STATE interrupt_state = NOTHING;
+volatile uint32_t last_interrupt = 0;
+
+static void IRAM_ATTR gpio_isr_handler(void* arg)
+{
+    uint32_t now = pdTICKS_TO_MS(xTaskGetTickCountFromISR());
+    if (now - last_interrupt < 50) 
+        return; 
+    last_interrupt = now;
+
+    esp_timer_stop(opto_timer);
+
+    if(!gpio_get_level(OPTOCOUPLER_GPIO) && interrupt_pulses == 0)
+        interrupt_state = STARTED;
+
+    interrupt_pulses++;
+    esp_timer_start_once(opto_timer, 1000000);
+}
+
+
+void opto_timer_callback(void* arg) 
+{
+    interrupt_state = READABLE;
+}
+
+
 
 void hsv_to_rgb(struct COLOR hsv, uint8_t* r, uint8_t* g, uint8_t* b)
 {
@@ -116,10 +145,33 @@ static size_t encoder_callback(const void *data, size_t data_size,
     }
 }
 
-
 void core1_main(void* args)
 {
     QueueHandle_t* pixel_queue = (QueueHandle_t*) args;
+
+
+    gpio_config_t io_conf = {
+        .pin_bit_mask = (1ULL << OPTOCOUPLER_GPIO),
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_ANYEDGE,
+    };
+    gpio_config(&io_conf);
+
+    //gpio_set_direction(OPTOCOUPLER_GPIO, GPIO_MODE_INPUT);
+    //gpio_set_pull_mode(OPTOCOUPLER_GPIO, GPIO_PULLUP_ONLY);
+    //gpio_set_intr_type(OPTOCOUPLER_GPIO, GPIO_INTR_ANYEDGE);
+    
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(OPTOCOUPLER_GPIO, gpio_isr_handler, (void*) OPTOCOUPLER_GPIO);
+
+
+    esp_timer_create_args_t timer_args = {
+        .callback = opto_timer_callback,
+        .name = "opto_timer"
+    };
+    esp_timer_create(&timer_args, &opto_timer);
 
 
     ESP_LOGI(TAG, "Create RMT TX channel");
@@ -164,9 +216,9 @@ void core1_main(void* args)
         pixeles[led].modo = 3;
         pixeles[led].tiempo = 0;
         pixeles[led].offset = led*50;
-        pixeles[led].extra = 50;
-        pixeles[led].params.respiracion.t_apagar = 1500;
-        pixeles[led].params.respiracion.t_encender = 1500;
+        pixeles[led].extra = 30;
+        pixeles[led].params.respiracion.t_apagar = 2000;
+        pixeles[led].params.respiracion.t_encender = 3000;
         pixeles[led].params.respiracion.brillo_min = 10;
     }
 
@@ -204,7 +256,7 @@ void core1_main(void* args)
                         angulo = M_PI_2 + fase * M_PI;
                     }
 
-                    pixel->color.value = pixeles[led].params.respiracion.color.hue + (int32_t)pixel->params.respiracion.brillo_min + (sinf(angulo) + 1.0f) * 0.5f * ((int32_t)pixel->extra - (int32_t)pixel->params.respiracion.brillo_min);
+                    pixel->color.value = (int32_t)pixel->params.respiracion.brillo_min + (sinf(angulo) + 1.0f) * 0.5f * ((int32_t)pixel->extra - (int32_t)pixel->params.respiracion.brillo_min);
                     break;
                 case FADE: //pixel->extra = ultimo color, pixel->tiempo = tiempo del ultimo color
                     t = (timestamp - pixel->tiempo) % (pixel->params.fade.t_fade);
@@ -234,6 +286,19 @@ void core1_main(void* args)
             pixeles[pixel_nuevo.num] = pixel_nuevo.pixel;
         }
 
-        vTaskDelay(pdMS_TO_TICKS(EXAMPLE_FRAME_DURATION_MS));
+        ESP_LOGI(TAG, "pulses: %d", interrupt_pulses);
+
+        if(interrupt_state == READABLE)
+        {
+            if(interrupt_pulses == 2)
+                gpio_set_level(2, 1);
+            else
+                gpio_set_level(2, 0);
+
+            interrupt_state = NOTHING;
+            interrupt_pulses = 0;
+        }
+
+        //vTaskDelay(1);
     }
 }

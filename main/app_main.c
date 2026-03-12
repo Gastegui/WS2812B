@@ -8,13 +8,11 @@
 #include <lwip/netdb.h>
 #include <sys/param.h>
 
-#include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
-#include "esp_timer.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -22,9 +20,7 @@
 #include "driver/gpio.h"
 #include "hal/gpio_types.h"
 #include "nvs_flash.h"
-#include "lwip/err.h"
 #include "lwip/sockets.h"
-#include "lwip/sys.h"
 #include "portmacro.h"
 
 #include "core1.h"
@@ -46,7 +42,6 @@
 
 
 struct PIXEL pixeles[NUM_PIXELES];
-volatile uint8_t rx_buffer[NUM_PIXELES];
 
 
 /* FreeRTOS event group to signal when we are connected*/
@@ -64,6 +59,7 @@ static int s_retry_num = 0;
 
 
 uint8_t mutex_locked = 0;
+uint8_t tcp_pixel[TCP_PIXEL_SIZE];
 
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
@@ -152,17 +148,19 @@ void wifi_init_sta(void)
     }
 }
 
-#define TCP_PIXEL_SIZE (PIXEL_PACKED_SIZE + 2)
 void receive(const int sock, QueueHandle_t *pixel_queue)
 {
     int len;
     uint16_t received = 0;
-
+    struct PIXEL_QUEUE pixel_nuevo;
+    uint16_t pixel_num;
     uint16_t cantidad_total;
-
+    uint16_t recibidos_total;
+    uint8_t packet_lenght = TCP_PIXEL_SIZE;
+    
     do
     {
-        len = recv(sock, rx_buffer + received, 2 - received, 0);
+        len = recv(sock, tcp_pixel + received, 2 - received, 0);
         if(len <= 0)
         {
             ESP_LOGE(TAG, "Error ocurred during receiving cantidad_total: errno %d", errno);
@@ -171,37 +169,34 @@ void receive(const int sock, QueueHandle_t *pixel_queue)
         received += len;
     } while(received != 2);
 
-    cantidad_total = rx_buffer[1] | (rx_buffer[0] << 8);
-    
+    cantidad_total = tcp_pixel[1] | (tcp_pixel[0] << 8);
     
     ESP_LOGI(TAG, "Cantidad total: %d %d", cantidad_total, pdTICKS_TO_MS(xTaskGetTickCount()));
     
-    for(uint16_t recibidos_total = 0; recibidos_total < cantidad_total; recibidos_total++)
+    for( recibidos_total = 0; cantidad_total == 0 || recibidos_total < cantidad_total; recibidos_total++)
     {
         received = 0;
-        do {
-            uint8_t* start = rx_buffer + received;
-
-            len = recv(sock, start, TCP_PIXEL_SIZE - received, 0);
+        do 
+        {
+            len = recv(sock, tcp_pixel + received, packet_lenght - received, 0);
             if(len > 0)
                 received += len;
 
             if (len < 0)
+            {
                 ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
+                goto QUIT;
+            }
             else if (len == 0)
+            {
                 ESP_LOGW(TAG, "Connection closed");
+                goto QUIT;
+            }
 
-        } while (len > 0 && received < TCP_PIXEL_SIZE);
+        } while (len > 0 && received < packet_lenght);
 
-        if(len <= 0)
-        {
-            ESP_LOGE(TAG, "len <= 0: %d", errno);
-            return;
-        }
 
-        uint8_t* start = rx_buffer;
-        struct PIXEL_QUEUE pixel_nuevo;
-        uint16_t pixel_num = (start[0] << 8) | start[1];
+        pixel_num = (tcp_pixel[0] << 8) | tcp_pixel[1];
 
         if (pixel_num >= NUM_PIXELES) {
             ESP_LOGW(TAG, "Invalid pixel_num: %d", pixel_num);
@@ -210,42 +205,56 @@ void receive(const int sock, QueueHandle_t *pixel_queue)
 
         pixel_nuevo.num = pixel_num;
 
-        pixel_nuevo.pixel.color.hue        = start[2];
-        pixel_nuevo.pixel.color.saturation = start[3];
-        pixel_nuevo.pixel.color.value      = start[4];
-        pixel_nuevo.pixel.modo             = (enum MODO)start[5];
-        pixel_nuevo.pixel.tiempo           = (start[6]  << 24) | (start[7]  << 16)
-                                | (start[8]  <<  8) |  start[9];
-        pixel_nuevo.pixel.offset           = (start[10] << 24) | (start[11] << 16)
-                                | (start[12] <<  8) |  start[13];
-        pixel_nuevo.pixel.extra            = start[14];
+        pixel_nuevo.pixel.color.hue        = tcp_pixel[2];
+        pixel_nuevo.pixel.color.saturation = tcp_pixel[3];
+        pixel_nuevo.pixel.color.value      = tcp_pixel[4];
+        if (cantidad_total != 0)
+        {
+            pixel_nuevo.pixel.modo             = (enum MODO)tcp_pixel[5];
+            pixel_nuevo.pixel.tiempo           = (tcp_pixel[6]  << 24) | (tcp_pixel[7]  << 16)
+                                    | (tcp_pixel[8]  <<  8) |  tcp_pixel[9];
+            pixel_nuevo.pixel.offset           = (tcp_pixel[10] << 24) | (tcp_pixel[11] << 16)
+                                    | (tcp_pixel[12] <<  8) |  tcp_pixel[13];
+            pixel_nuevo.pixel.extra            = tcp_pixel[14];
+    
+            pixel_nuevo.pixel.params.fade.t_fade = (tcp_pixel[15] << 24) | (tcp_pixel[16] << 16)
+                                    | (tcp_pixel[17] <<  8) |  tcp_pixel[18];
+            pixel_nuevo.pixel.params.fade.nada   = (tcp_pixel[19] << 24) | (tcp_pixel[20] << 16)
+                                    | (tcp_pixel[21] <<  8) |  tcp_pixel[22];
+            pixel_nuevo.pixel.params.fade.nada2  = tcp_pixel[23];
+    
+            pixel_nuevo.pixel.params.fade.uno.hue        = tcp_pixel[24];
+            pixel_nuevo.pixel.params.fade.uno.saturation = tcp_pixel[25];
+            pixel_nuevo.pixel.params.fade.uno.value      = tcp_pixel[26];
+            pixel_nuevo.pixel.params.fade.dos.hue        = tcp_pixel[27];
+            pixel_nuevo.pixel.params.fade.dos.saturation = tcp_pixel[28];
+            pixel_nuevo.pixel.params.fade.dos.value      = tcp_pixel[29];
+            pixel_nuevo.pixel.params.fade.tres.hue       = tcp_pixel[30];
+            pixel_nuevo.pixel.params.fade.tres.saturation= tcp_pixel[31];
+            pixel_nuevo.pixel.params.fade.tres.value     = tcp_pixel[32];
+            pixel_nuevo.pixel.params.fade.cuatro.hue     = tcp_pixel[33];
+            pixel_nuevo.pixel.params.fade.cuatro.saturation = tcp_pixel[34];
+            pixel_nuevo.pixel.params.fade.cuatro.value   = tcp_pixel[35];
+            pixel_nuevo.pixel.params.fade.cinco.hue      = tcp_pixel[36];
+            pixel_nuevo.pixel.params.fade.cinco.saturation = tcp_pixel[37];
+            pixel_nuevo.pixel.params.fade.cinco.value    = tcp_pixel[38];
+        }
 
-        pixel_nuevo.pixel.params.fade.t_fade = (start[15] << 24) | (start[16] << 16)
-                                | (start[17] <<  8) |  start[18];
-        pixel_nuevo.pixel.params.fade.nada   = (start[19] << 24) | (start[20] << 16)
-                                | (start[21] <<  8) |  start[22];
-        pixel_nuevo.pixel.params.fade.nada2  = start[23];
-
-        pixel_nuevo.pixel.params.fade.uno.hue        = start[24];
-        pixel_nuevo.pixel.params.fade.uno.saturation = start[25];
-        pixel_nuevo.pixel.params.fade.uno.value      = start[26];
-        pixel_nuevo.pixel.params.fade.dos.hue        = start[27];
-        pixel_nuevo.pixel.params.fade.dos.saturation = start[28];
-        pixel_nuevo.pixel.params.fade.dos.value      = start[29];
-        pixel_nuevo.pixel.params.fade.tres.hue       = start[30];
-        pixel_nuevo.pixel.params.fade.tres.saturation= start[31];
-        pixel_nuevo.pixel.params.fade.tres.value     = start[32];
-        pixel_nuevo.pixel.params.fade.cuatro.hue     = start[33];
-        pixel_nuevo.pixel.params.fade.cuatro.saturation = start[34];
-        pixel_nuevo.pixel.params.fade.cuatro.value   = start[35];
-        pixel_nuevo.pixel.params.fade.cinco.hue      = start[36];
-        pixel_nuevo.pixel.params.fade.cinco.saturation = start[37];
-        pixel_nuevo.pixel.params.fade.cinco.value    = start[38];
-
-        xQueueSendToBack(*pixel_queue, (void*) &pixel_nuevo, 0);
+        if(cantidad_total == 0)
+        {
+            if(pixeles[pixel_num].modo != ESTATICO)
+                pixeles[pixel_num].modo = ESTATICO;
+            
+            pixeles[pixel_num].color.hue = pixel_nuevo.pixel.color.hue;
+            pixeles[pixel_num].color.saturation = pixel_nuevo.pixel.color.saturation;
+            pixeles[pixel_num].color.value = pixel_nuevo.pixel.color.value;
+        }
+        else
+            xQueueSendToBack(*pixel_queue, (void*) &pixel_nuevo, 0);
     }
-    ESP_LOGI(TAG, "TERMINADO %d", pdTICKS_TO_MS(xTaskGetTickCount()));
 
+QUIT:
+    ESP_LOGI(TAG, "TERMINADO %d", pdTICKS_TO_MS(xTaskGetTickCount()));
 
 }
 
@@ -258,6 +267,7 @@ void tcp_server_task(void* pixel_queue)
     uint8_t keepIdle = KEEPALIVE_IDLE;
     uint8_t keepInterval = KEEPALIVE_INTERVAL;
     uint8_t keepCount = KEEPALIVE_COUNT;
+    uint8_t disableNagle = 1;
     struct sockaddr_storage dest_addr;
 
     if (addr_family == AF_INET) {
@@ -310,6 +320,7 @@ void tcp_server_task(void* pixel_queue)
         setsockopt(sock, IPPROTO_TCP, TCP_KEEPIDLE, &keepIdle, sizeof(int));
         setsockopt(sock, IPPROTO_TCP, TCP_KEEPINTVL, &keepInterval, sizeof(int));
         setsockopt(sock, IPPROTO_TCP, TCP_KEEPCNT, &keepCount, sizeof(int));
+        setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &disableNagle, sizeof(disableNagle));
         // Convert ip address to string
         if (source_addr.ss_family == PF_INET) {
             inet_ntoa_r(((struct sockaddr_in *)&source_addr)->sin_addr, addr_str, sizeof(addr_str) - 1);
@@ -345,7 +356,8 @@ void core0_main(void* arg)
 
     ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
     wifi_init_sta();
-
+    esp_wifi_set_ps(WIFI_PS_NONE);
+    
     gpio_reset_pin(2);
     gpio_set_direction(2, GPIO_MODE_OUTPUT);
 
@@ -369,8 +381,8 @@ void app_main(void)
     QueueHandle_t pixel_queue = xQueueCreate(400, sizeof(struct PIXEL_QUEUE));
     assert(pixel_queue != NULL);
 
-    xTaskCreatePinnedToCore(core0_main, "core0", 4096, &pixel_queue, 1, NULL, 0);
-    xTaskCreatePinnedToCore(core1_main, "core1", 4096, &pixel_queue, 5, NULL, 1);
+    xTaskCreatePinnedToCore(core0_main, "core0", 8192, &pixel_queue, 1, NULL, 0);
+    xTaskCreatePinnedToCore(core1_main, "core1", 8192, &pixel_queue, 5, NULL, 1);
 
     while(1)
     {

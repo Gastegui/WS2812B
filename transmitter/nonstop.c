@@ -1,12 +1,18 @@
+#include <stdatomic.h>
 #include <stdio.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <unistd.h>
-#include <string.h>
 
 
 #include "../main/tipos.h"
 
+static volatile atomic_int running = 1;
+
+void handle_sigint(int sig) {
+    (void)sig;
+    running = 0;
+}
 uint16_t encode(uint16_t num, struct PIXEL* pixel, uint8_t* stream)
 {
     uint16_t pos = 0;
@@ -88,7 +94,7 @@ int main() {
 
     server.sin_family = AF_INET;
     server.sin_port = htons(3333);
-    server.sin_addr.s_addr = inet_addr("192.168.1.136");
+    server.sin_addr.s_addr = inet_addr("192.168.1.130");
 
     // Connect
     if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0) {
@@ -99,41 +105,41 @@ int main() {
     
     uint16_t pos = 0;
     
-    uint16_t inicio = 232;
-    uint16_t cantidad = 33;
+    uint16_t inicio = 0;
+    int cantidad = 288;
     struct PIXEL pixel[cantidad];
-    uint8_t stream[cantidad * (PIXEL_PACKED_SIZE+2)];
+    uint8_t stream[cantidad * 5];
 
-    memset(pixel, 0, sizeof(pixel));
-
-    for(uint16_t i = inicio; i < inicio + cantidad; i++)
-    {
-        pixel[i].color = (struct COLOR){40, 150, 255};
-        pixel[i].modo = ESTATICO;
-        pixel[i].tiempo = 0;
-        pixel[i].offset = i*50;
-        pixel[i].extra = 30;
-        pixel[i].params.respiracion.t_apagar = 2000;
-        pixel[i].params.respiracion.t_encender = 3000;
-        pixel[i].params.respiracion.brillo_min = 10;
-        
-        pos += encode(i, &pixel[i], stream+pos);
-    }
 
     uint8_t size[2] = {0};
-    size[0] = (cantidad & (0xFF << 8)) >> 8;
-    size[1] = cantidad & 0xFF;
-
-    // Send
     if (send(sock, size, sizeof(size), 0) < 0) {
-        perror("send");
+        perror("size");
         return 1;
     }
-    // Send
-    if (send(sock, stream, sizeof(stream), 0) < 0) {
-        perror("send");
-        return 1;
+    uint16_t on = 0;
+    while(running)
+    {
+        pos = 0;
+        for(uint16_t i = inicio; i < inicio + cantidad; i++)
+        {
+            int b = i*5;
+            stream[b] = (i>>8)&0xFF;
+            stream[b+1] = i&0xFF;
+            stream[b+2] = on + i;
+            stream[b+3] = 250;
+            stream[b+4] = 5;
+        }
+
+        if (send(sock, stream, sizeof(stream), 0) < 0) 
+        {
+            perror("stream");
+            return 1;
+        }
+        //usleep(50);
+        on++;
     }
+
+
     close(sock);
     return 0;
 }
