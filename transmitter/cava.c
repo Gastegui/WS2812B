@@ -7,7 +7,7 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 
-#define HOST "192.168.1.220"
+#define HOST "192.168.1.223"
 #define PORT 3333
 
 static volatile atomic_int running = 1;
@@ -31,7 +31,7 @@ int main()
 
     server.sin_family = AF_INET;
     server.sin_port = htons(3333);
-    server.sin_addr.s_addr = inet_addr("192.168.1.136");
+    server.sin_addr.s_addr = inet_addr(HOST);
 
     if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0) 
     {
@@ -44,7 +44,7 @@ int main()
 
     FILE *cava = popen("cava -p ./cava_config", "r");
     char line[1024];
-    
+
     while (fgets(line, sizeof(line), cava) && running) 
     {
         uint8_t packet[100 * 5];
@@ -63,7 +63,6 @@ int main()
             packet[offset++] = 10 + n/2;
             packet[offset++] = 0xFF;
             packet[offset++] = 30;
-
             i--;
             token = strtok(NULL, ";");
         }

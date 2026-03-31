@@ -4,13 +4,10 @@
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
 #include "driver/rmt_tx.h"
-#include "driver/gpio.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 
 #include "core1.h"
 #include "globales.h"
-#include "hal/gpio_types.h"
 #include "tipos.h"
 
 
@@ -18,20 +15,9 @@
 #define RMT_LED_STRIP_RESOLUTION_HZ 10000000 // 10MHz resolution, 1 tick = 0.1us (led strip needs a high resolution)
 #define RMT_LED_STRIP_GPIO_NUM      14
 
-#define EXAMPLE_LED_NUMBERS         NUM_PIXELES
-
-#define EXAMPLE_FRAME_DURATION_MS   1
-#define EXAMPLE_ANGLE_INC_FRAME     0.01
-#define EXAMPLE_ANGLE_INC_LED       0.1
-
 static const char *TAG = "example";
 
-static uint8_t led_strip_pixels[EXAMPLE_LED_NUMBERS * 3];
-
-
-
-volatile SemaphoreHandle_t pixeles_mutex;
-
+static uint8_t led_strip_pixels[NUM_PIXELES * 3];
 
 static const rmt_symbol_word_t ws2812_zero = {
     .level0 = 1,
@@ -54,35 +40,6 @@ static const rmt_symbol_word_t ws2812_reset = {
     .level1 = 0,
     .duration1 = RMT_LED_STRIP_RESOLUTION_HZ / 1000000 * 50 / 2,
 };
-
-esp_timer_handle_t opto_timer;
-volatile uint8_t interrupt_pulses = 0;
-volatile enum INTERRUPT_STATE interrupt_state = NOTHING;
-volatile uint32_t last_interrupt = 0;
-
-static void IRAM_ATTR gpio_isr_handler(void* arg)
-{
-    uint32_t now = pdTICKS_TO_MS(xTaskGetTickCountFromISR());
-    if (now - last_interrupt < 50) 
-        return; 
-    last_interrupt = now;
-
-    esp_timer_stop(opto_timer);
-
-    if(!gpio_get_level(OPTOCOUPLER_GPIO) && interrupt_pulses == 0)
-        interrupt_state = STARTED;
-
-    interrupt_pulses++;
-    esp_timer_start_once(opto_timer, 1000000);
-}
-
-
-void opto_timer_callback(void* arg) 
-{
-    interrupt_state = READABLE;
-}
-
-
 
 void hsv_to_rgb(struct COLOR hsv, uint8_t* r, uint8_t* g, uint8_t* b)
 {
@@ -149,31 +106,6 @@ void core1_main(void* args)
 {
     QueueHandle_t* pixel_queue = (QueueHandle_t*) args;
 
-
-    gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << OPTOCOUPLER_GPIO),
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_ANYEDGE,
-    };
-    gpio_config(&io_conf);
-
-    //gpio_set_direction(OPTOCOUPLER_GPIO, GPIO_MODE_INPUT);
-    //gpio_set_pull_mode(OPTOCOUPLER_GPIO, GPIO_PULLUP_ONLY);
-    //gpio_set_intr_type(OPTOCOUPLER_GPIO, GPIO_INTR_ANYEDGE);
-    
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add(OPTOCOUPLER_GPIO, gpio_isr_handler, (void*) OPTOCOUPLER_GPIO);
-
-
-    esp_timer_create_args_t timer_args = {
-        .callback = opto_timer_callback,
-        .name = "opto_timer"
-    };
-    esp_timer_create(&timer_args, &opto_timer);
-
-
     ESP_LOGI(TAG, "Create RMT TX channel");
     rmt_channel_handle_t led_chan = NULL;
     rmt_tx_channel_config_t tx_chan_config = {
@@ -220,6 +152,8 @@ void core1_main(void* args)
         pixeles[led].params.respiracion.t_apagar = 2000;
         pixeles[led].params.respiracion.t_encender = 3000;
         pixeles[led].params.respiracion.brillo_min = 10;
+        pixeles[led].params.respiracion.t_encendido = 0;
+        pixeles[led].params.respiracion.t_apagado = 0;
     }
 
     while (1) 
@@ -243,20 +177,29 @@ void core1_main(void* args)
                         pixel->color.value = pixeles->extra;
                     break;
                 case RESPIRACION: //pixel->extra = brillo_max
-                    t = (timestamp - pixel->tiempo + pixel->offset) % (pixel->params.pulso.t_encendido + pixel->params.pulso.t_apagado);
+                    t = (timestamp - pixel->tiempo + pixel->offset) % (pixel->params.respiracion.t_encender + pixel->params.respiracion.t_encendido + pixel->params.respiracion.t_apagar + pixel->params.respiracion.t_apagado);
 
-                    if (t < pixel->params.pulso.t_encendido)
+                    if(t < pixel->params.respiracion.t_encender)
                     {
-                        fase = (float)t / pixel->params.pulso.t_encendido;
+                        fase = (float)t / pixel->params.respiracion.t_encender;
                         angulo = -M_PI_2 + fase * M_PI;
+                        pixel->color.value = (int32_t)pixel->params.respiracion.brillo_min + (sinf(angulo) + 1.0f) * 0.5f * ((int32_t)pixel->extra - (int32_t)pixel->params.respiracion.brillo_min);
                     }
-                    else
+                    else if(t < pixel->params.respiracion.t_encender + pixel->params.respiracion.t_encendido)
                     {
-                        fase = (float)(t - pixel->params.pulso.t_encendido) / pixel->params.pulso.t_apagado;
+                        pixel->color.value = pixel->extra;
+                    }
+                    else if(t < pixel->params.respiracion.t_encender + pixel->params.respiracion.t_encendido + pixel->params.respiracion.t_apagar)
+                    {
+                        fase = (float)(t - pixel->params.respiracion.t_encender - pixel->params.respiracion.t_encendido) / pixel->params.respiracion.t_apagar;
                         angulo = M_PI_2 + fase * M_PI;
+                        pixel->color.value = (int32_t)pixel->params.respiracion.brillo_min + (sinf(angulo) + 1.0f) * 0.5f * ((int32_t)pixel->extra - (int32_t)pixel->params.respiracion.brillo_min);
+                    }
+                    else 
+                    {
+                        pixel->color.value = pixel->params.respiracion.brillo_min;
                     }
 
-                    pixel->color.value = (int32_t)pixel->params.respiracion.brillo_min + (sinf(angulo) + 1.0f) * 0.5f * ((int32_t)pixel->extra - (int32_t)pixel->params.respiracion.brillo_min);
                     break;
                 case FADE: //pixel->extra = ultimo color, pixel->tiempo = tiempo del ultimo color
                     t = (timestamp - pixel->tiempo) % (pixel->params.fade.t_fade);
@@ -275,7 +218,6 @@ void core1_main(void* args)
         }
 
 
-        // Flush RGB values to LEDs
         ESP_ERROR_CHECK(rmt_transmit(led_chan, simple_encoder, led_strip_pixels, sizeof(led_strip_pixels), &tx_config));
         ESP_ERROR_CHECK(rmt_tx_wait_all_done(led_chan, portMAX_DELAY));
         timestamp = pdTICKS_TO_MS(xTaskGetTickCount());
@@ -284,19 +226,6 @@ void core1_main(void* args)
         {
             pixel_nuevo.pixel.tiempo = timestamp;
             pixeles[pixel_nuevo.num] = pixel_nuevo.pixel;
-        }
-
-        ESP_LOGI(TAG, "pulses: %d", interrupt_pulses);
-
-        if(interrupt_state == READABLE)
-        {
-            if(interrupt_pulses == 2)
-                gpio_set_level(2, 1);
-            else
-                gpio_set_level(2, 0);
-
-            interrupt_state = NOTHING;
-            interrupt_pulses = 0;
         }
 
         //vTaskDelay(1);

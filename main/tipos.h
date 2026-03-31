@@ -46,6 +46,8 @@ struct PARAMS_RESPIRACION
     TIEMPO t_apagar;
     uint8_t brillo_min;
     struct COLOR color;
+    TIEMPO t_encendido;
+    TIEMPO t_apagado;
 };
 
 struct PARAMS_FADE

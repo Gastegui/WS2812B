@@ -58,7 +58,6 @@ static const char *TAG = "WIFI TCP SERVER";
 static int s_retry_num = 0;
 
 
-uint8_t mutex_locked = 0;
 uint8_t tcp_pixel[TCP_PIXEL_SIZE];
 
 
@@ -173,6 +172,9 @@ void receive(const int sock, QueueHandle_t *pixel_queue)
     
     ESP_LOGI(TAG, "Cantidad total: %d %d", cantidad_total, pdTICKS_TO_MS(xTaskGetTickCount()));
     
+    if(cantidad_total == 0)
+        packet_lenght = 5;
+
     for( recibidos_total = 0; cantidad_total == 0 || recibidos_total < cantidad_total; recibidos_total++)
     {
         received = 0;
@@ -211,33 +213,58 @@ void receive(const int sock, QueueHandle_t *pixel_queue)
         if (cantidad_total != 0)
         {
             pixel_nuevo.pixel.modo             = (enum MODO)tcp_pixel[5];
+            if(pixel_nuevo.pixel.modo == APAGADO)
+                pixel_nuevo.pixel.color.value = 0;
+
             pixel_nuevo.pixel.tiempo           = (tcp_pixel[6]  << 24) | (tcp_pixel[7]  << 16)
                                     | (tcp_pixel[8]  <<  8) |  tcp_pixel[9];
             pixel_nuevo.pixel.offset           = (tcp_pixel[10] << 24) | (tcp_pixel[11] << 16)
                                     | (tcp_pixel[12] <<  8) |  tcp_pixel[13];
             pixel_nuevo.pixel.extra            = tcp_pixel[14];
     
-            pixel_nuevo.pixel.params.fade.t_fade = (tcp_pixel[15] << 24) | (tcp_pixel[16] << 16)
-                                    | (tcp_pixel[17] <<  8) |  tcp_pixel[18];
-            pixel_nuevo.pixel.params.fade.nada   = (tcp_pixel[19] << 24) | (tcp_pixel[20] << 16)
-                                    | (tcp_pixel[21] <<  8) |  tcp_pixel[22];
-            pixel_nuevo.pixel.params.fade.nada2  = tcp_pixel[23];
-    
-            pixel_nuevo.pixel.params.fade.uno.hue        = tcp_pixel[24];
-            pixel_nuevo.pixel.params.fade.uno.saturation = tcp_pixel[25];
-            pixel_nuevo.pixel.params.fade.uno.value      = tcp_pixel[26];
-            pixel_nuevo.pixel.params.fade.dos.hue        = tcp_pixel[27];
-            pixel_nuevo.pixel.params.fade.dos.saturation = tcp_pixel[28];
-            pixel_nuevo.pixel.params.fade.dos.value      = tcp_pixel[29];
-            pixel_nuevo.pixel.params.fade.tres.hue       = tcp_pixel[30];
-            pixel_nuevo.pixel.params.fade.tres.saturation= tcp_pixel[31];
-            pixel_nuevo.pixel.params.fade.tres.value     = tcp_pixel[32];
-            pixel_nuevo.pixel.params.fade.cuatro.hue     = tcp_pixel[33];
-            pixel_nuevo.pixel.params.fade.cuatro.saturation = tcp_pixel[34];
-            pixel_nuevo.pixel.params.fade.cuatro.value   = tcp_pixel[35];
-            pixel_nuevo.pixel.params.fade.cinco.hue      = tcp_pixel[36];
-            pixel_nuevo.pixel.params.fade.cinco.saturation = tcp_pixel[37];
-            pixel_nuevo.pixel.params.fade.cinco.value    = tcp_pixel[38];
+            if(pixel_nuevo.pixel.modo == RESPIRACION)
+            {
+                pixel_nuevo.pixel.params.respiracion.t_encender = (tcp_pixel[15] << 24) | (tcp_pixel[16] << 16)
+                                        | (tcp_pixel[17] <<  8) |  tcp_pixel[18];
+                pixel_nuevo.pixel.params.respiracion.t_apagar   = (tcp_pixel[19] << 24) | (tcp_pixel[20] << 16)
+                                        | (tcp_pixel[21] <<  8) |  tcp_pixel[22];
+                pixel_nuevo.pixel.params.respiracion.brillo_min = tcp_pixel[23];
+                pixel_nuevo.pixel.params.respiracion.color.hue = tcp_pixel[24];
+                pixel_nuevo.pixel.params.respiracion.color.saturation = tcp_pixel[25];
+                pixel_nuevo.pixel.params.respiracion.color.value = tcp_pixel[26];
+                pixel_nuevo.pixel.params.respiracion.t_encendido = (tcp_pixel[27] << 24) | (tcp_pixel[28] << 16)
+                                        | (tcp_pixel[29] <<  8) |  tcp_pixel[30];
+                pixel_nuevo.pixel.params.respiracion.t_encendido = (tcp_pixel[31] << 24) | (tcp_pixel[32] << 16)
+                                        | (tcp_pixel[33] <<  8) |  tcp_pixel[34];
+                pixel_nuevo.pixel.params.fade.cuatro.value   = tcp_pixel[35];
+                pixel_nuevo.pixel.params.fade.cinco.hue      = tcp_pixel[36];
+                pixel_nuevo.pixel.params.fade.cinco.saturation = tcp_pixel[37];
+                pixel_nuevo.pixel.params.fade.cinco.value    = tcp_pixel[38];
+            }
+            else 
+            {
+                pixel_nuevo.pixel.params.fade.t_fade = (tcp_pixel[15] << 24) | (tcp_pixel[16] << 16)
+                                        | (tcp_pixel[17] <<  8) |  tcp_pixel[18];
+                pixel_nuevo.pixel.params.fade.nada   = (tcp_pixel[19] << 24) | (tcp_pixel[20] << 16)
+                                        | (tcp_pixel[21] <<  8) |  tcp_pixel[22];
+                pixel_nuevo.pixel.params.fade.nada2  = tcp_pixel[23];
+        
+                pixel_nuevo.pixel.params.fade.uno.hue        = tcp_pixel[24];
+                pixel_nuevo.pixel.params.fade.uno.saturation = tcp_pixel[25];
+                pixel_nuevo.pixel.params.fade.uno.value      = tcp_pixel[26];
+                pixel_nuevo.pixel.params.fade.dos.hue        = tcp_pixel[27];
+                pixel_nuevo.pixel.params.fade.dos.saturation = tcp_pixel[28];
+                pixel_nuevo.pixel.params.fade.dos.value      = tcp_pixel[29];
+                pixel_nuevo.pixel.params.fade.tres.hue       = tcp_pixel[30];
+                pixel_nuevo.pixel.params.fade.tres.saturation= tcp_pixel[31];
+                pixel_nuevo.pixel.params.fade.tres.value     = tcp_pixel[32];
+                pixel_nuevo.pixel.params.fade.cuatro.hue     = tcp_pixel[33];
+                pixel_nuevo.pixel.params.fade.cuatro.saturation = tcp_pixel[34];
+                pixel_nuevo.pixel.params.fade.cuatro.value   = tcp_pixel[35];
+                pixel_nuevo.pixel.params.fade.cinco.hue      = tcp_pixel[36];
+                pixel_nuevo.pixel.params.fade.cinco.saturation = tcp_pixel[37];
+                pixel_nuevo.pixel.params.fade.cinco.value    = tcp_pixel[38];
+            }
         }
 
         if(cantidad_total == 0)
@@ -255,7 +282,6 @@ void receive(const int sock, QueueHandle_t *pixel_queue)
 
 QUIT:
     ESP_LOGI(TAG, "TERMINADO %d", pdTICKS_TO_MS(xTaskGetTickCount()));
-
 }
 
 void tcp_server_task(void* pixel_queue)
@@ -358,13 +384,9 @@ void core0_main(void* arg)
     wifi_init_sta();
     esp_wifi_set_ps(WIFI_PS_NONE);
     
+    //GPIO 2 is the board LED, which is turned on when WiFi connects
     gpio_reset_pin(2);
     gpio_set_direction(2, GPIO_MODE_OUTPUT);
-
-    gpio_reset_pin(25);
-    gpio_set_direction(25, GPIO_MODE_OUTPUT);
-    gpio_set_level(25, 1);
-
 
     tcp_server_task(arg);
 

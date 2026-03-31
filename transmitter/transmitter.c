@@ -79,7 +79,6 @@ int main() {
     int sock;
     struct sockaddr_in server;
 
-    // Create socket
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == -1) {
         perror("socket");
@@ -88,9 +87,8 @@ int main() {
 
     server.sin_family = AF_INET;
     server.sin_port = htons(3333);
-    server.sin_addr.s_addr = inet_addr("192.168.1.136");
+    server.sin_addr.s_addr = inet_addr("192.168.1.223");
 
-    // Connect
     if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0) {
         perror("connect");
         return 1;
@@ -99,8 +97,8 @@ int main() {
     
     uint16_t pos = 0;
     
-    uint16_t inicio = 232;
-    uint16_t cantidad = 33;
+    uint16_t inicio = 0;
+    uint16_t cantidad = 288;
     struct PIXEL pixel[cantidad];
     uint8_t stream[cantidad * (PIXEL_PACKED_SIZE+2)];
 
@@ -108,14 +106,16 @@ int main() {
 
     for(uint16_t i = inicio; i < inicio + cantidad; i++)
     {
-        pixel[i].color = (struct COLOR){40, 150, 255};
-        pixel[i].modo = ESTATICO;
+        pixel[i].color = (struct COLOR){40, 150, 0};
+        pixel[i].modo = RESPIRACION;
         pixel[i].tiempo = 0;
         pixel[i].offset = i*50;
         pixel[i].extra = 30;
         pixel[i].params.respiracion.t_apagar = 2000;
         pixel[i].params.respiracion.t_encender = 3000;
         pixel[i].params.respiracion.brillo_min = 10;
+        pixel[i].params.respiracion.t_encendido = 0;
+        pixel[i].params.respiracion.t_apagado = 0;
         
         pos += encode(i, &pixel[i], stream+pos);
     }
@@ -124,12 +124,10 @@ int main() {
     size[0] = (cantidad & (0xFF << 8)) >> 8;
     size[1] = cantidad & 0xFF;
 
-    // Send
     if (send(sock, size, sizeof(size), 0) < 0) {
         perror("send");
         return 1;
     }
-    // Send
     if (send(sock, stream, sizeof(stream), 0) < 0) {
         perror("send");
         return 1;

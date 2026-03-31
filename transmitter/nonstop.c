@@ -85,7 +85,6 @@ int main() {
     int sock;
     struct sockaddr_in server;
 
-    // Create socket
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == -1) {
         perror("socket");
@@ -94,9 +93,8 @@ int main() {
 
     server.sin_family = AF_INET;
     server.sin_port = htons(3333);
-    server.sin_addr.s_addr = inet_addr("192.168.1.130");
+    server.sin_addr.s_addr = inet_addr("192.168.1.223");
 
-    // Connect
     if (connect(sock, (struct sockaddr *)&server, sizeof(server)) < 0) {
         perror("connect");
         return 1;
@@ -129,13 +127,12 @@ int main() {
             stream[b+3] = 250;
             stream[b+4] = 5;
         }
-
+        char a[10];
         if (send(sock, stream, sizeof(stream), 0) < 0) 
         {
             perror("stream");
             return 1;
         }
-        //usleep(50);
         on++;
     }
 
