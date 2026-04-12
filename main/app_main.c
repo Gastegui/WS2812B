@@ -234,7 +234,7 @@ void receive(const int sock, QueueHandle_t *pixel_queue)
                 pixel_nuevo.pixel.params.respiracion.color.value = tcp_pixel[26];
                 pixel_nuevo.pixel.params.respiracion.t_encendido = (tcp_pixel[27] << 24) | (tcp_pixel[28] << 16)
                                         | (tcp_pixel[29] <<  8) |  tcp_pixel[30];
-                pixel_nuevo.pixel.params.respiracion.t_encendido = (tcp_pixel[31] << 24) | (tcp_pixel[32] << 16)
+                pixel_nuevo.pixel.params.respiracion.t_apagado = (tcp_pixel[31] << 24) | (tcp_pixel[32] << 16)
                                         | (tcp_pixel[33] <<  8) |  tcp_pixel[34];
                 pixel_nuevo.pixel.params.fade.cuatro.value   = tcp_pixel[35];
                 pixel_nuevo.pixel.params.fade.cinco.hue      = tcp_pixel[36];
