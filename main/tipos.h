@@ -69,18 +69,16 @@ struct PARAMS_ARCOIRIS
     uint8_t nada2;
 };
 
-#define PIXEL_PACKED_SIZE 37
-#define TCP_PIXEL_SIZE (PIXEL_PACKED_SIZE + 2)
+#define PIXEL_PARAMS_SIZE sizeof(struct PARAMS_FADE)
 struct PIXEL
 {
     struct COLOR color;
     enum MODO modo;
-    TIEMPO tiempo;
     TIEMPO offset;
     uint8_t extra;
     union PARAMS
     {
-        uint8_t raw[sizeof(struct PARAMS_FADE)];
+        uint8_t raw[PIXEL_PARAMS_SIZE];
         struct PARAMS_ESTATICO estatico;
         struct PARAMS_PULSO pulso;
         struct PARAMS_RESPIRACION respiracion;
@@ -89,17 +87,37 @@ struct PIXEL
     } params;
 };
 
+
+struct __attribute__((packed)) PIXEL_TCP
+{
+    uint16_t index;
+
+    uint8_t hue;
+    uint8_t saturation;
+    uint8_t value;
+
+    uint8_t modo;
+
+    TIEMPO offset;
+
+    uint8_t extra;
+
+    uint8_t params_raw[PIXEL_PARAMS_SIZE];
+};
+#define PIXEL_TCP_SIZE sizeof(struct PIXEL_TCP)
+
+struct __attribute__((packed)) PIXEL_TCP_STREAM
+{
+    uint16_t index;
+    uint8_t hue;
+    uint8_t saturation;
+    uint8_t value;
+};
+#define PIXEL_TCP_STREAM_SIZE sizeof(struct PIXEL_TCP_STREAM)
+
 struct PIXEL_QUEUE{
     uint16_t num;
     struct PIXEL pixel;
 };
-
-enum INTERRUPT_STATE: uint8_t
-{
-    NOTHING,
-    STARTED,
-    READABLE
-};
-
 
 #endif

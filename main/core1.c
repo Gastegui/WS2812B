@@ -146,7 +146,6 @@ void core1_main(void* args)
     {
         pixeles[led].color = (struct COLOR){40, 150, 100};
         pixeles[led].modo = 3;
-        pixeles[led].tiempo = 0;
         pixeles[led].offset = led*50;
         pixeles[led].extra = 30;
         pixeles[led].params.respiracion.t_apagar = 2000;
@@ -166,18 +165,18 @@ void core1_main(void* args)
             switch(pixel->modo)
             {
                 case ARCOIRIS:
-                    t = (timestamp - pixel->tiempo) % pixel->params.arcoiris.t_tiempo_ciclo;
+                    t = timestamp % pixel->params.arcoiris.t_tiempo_ciclo;
                     pixel->color.hue = pixel->offset + (255*t) / pixel->params.arcoiris.t_tiempo_ciclo;
                     break;
                 case PULSO: //pixel->extra = brillo
-                    t = (timestamp - pixel->tiempo + pixel->offset) % (pixel->params.pulso.t_encendido + pixel->params.pulso.t_apagado);
+                    t = (timestamp - pixel->offset) % (pixel->params.pulso.t_encendido + pixel->params.pulso.t_apagado);
                     if(t >= pixel->params.pulso.t_encendido)
                         pixel->color.value = 0;
                     else
-                        pixel->color.value = pixeles->extra;
+                        pixel->color.value = pixel->extra;
                     break;
                 case RESPIRACION: //pixel->extra = brillo_max
-                    t = (timestamp - pixel->tiempo + pixel->offset) % (pixel->params.respiracion.t_encender + pixel->params.respiracion.t_encendido + pixel->params.respiracion.t_apagar + pixel->params.respiracion.t_apagado);
+                    t = (timestamp - pixel->offset) % (pixel->params.respiracion.t_encender + pixel->params.respiracion.t_encendido + pixel->params.respiracion.t_apagar + pixel->params.respiracion.t_apagado);
 
                     if(t < pixel->params.respiracion.t_encender)
                     {
@@ -202,10 +201,12 @@ void core1_main(void* args)
 
                     break;
                 case FADE: //pixel->extra = ultimo color, pixel->tiempo = tiempo del ultimo color
-                    t = (timestamp - pixel->tiempo) % (pixel->params.fade.t_fade);
+                    t = timestamp % (pixel->params.fade.t_fade);
 
                     break;
                 case ESTATICO:
+                    pixel->color = pixel->params.estatico.color;
+                    break;
                 case APAGADO:
                 default:
                     break;
@@ -223,10 +224,7 @@ void core1_main(void* args)
         timestamp = pdTICKS_TO_MS(xTaskGetTickCount());
 
         while (xQueueReceive(*pixel_queue, &pixel_nuevo, 0) == pdTRUE)
-        {
-            pixel_nuevo.pixel.tiempo = timestamp;
             pixeles[pixel_nuevo.num] = pixel_nuevo.pixel;
-        }
 
         //vTaskDelay(1);
     }

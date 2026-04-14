@@ -7,6 +7,7 @@
 #include <string.h>
 #include <lwip/netdb.h>
 #include <sys/param.h>
+#include <sys/types.h>
 
 #include "freertos/idf_additions.h"
 #include "freertos/task.h"
@@ -15,7 +16,6 @@
 #include "freertos/queue.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
-#include "esp_log.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "hal/gpio_types.h"
@@ -58,8 +58,8 @@ static const char *TAG = "WIFI TCP SERVER";
 static int s_retry_num = 0;
 
 
-uint8_t tcp_pixel[TCP_PIXEL_SIZE];
-
+struct PIXEL_TCP buffer[NUM_PIXELES] = {0};
+uint8_t* buffer8_t = (uint8_t*)buffer;
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
@@ -147,19 +147,112 @@ void wifi_init_sta(void)
     }
 }
 
+void send_status(const int sock)
+{
+    for(uint16_t i = 0; i < NUM_PIXELES; i++)
+    {
+        buffer[i].index = i;
+        buffer[i].hue = pixeles[i].color.hue;
+        buffer[i].saturation = pixeles[i].color.saturation;
+        buffer[i].value = pixeles[i].color.value;
+        buffer[i].modo = pixeles[i].modo;
+        buffer[i].offset = pixeles[i].offset;
+        buffer[i].extra = pixeles[i].extra;
+        memcpy(buffer[i].params_raw, pixeles[i].params.raw, PIXEL_PARAMS_SIZE);
+    }
+
+    ssize_t to_write = sizeof(buffer);
+    while(to_write > 0)
+    {
+        ssize_t written = send(sock, buffer8_t + (sizeof(buffer) - to_write), to_write, 0);
+        if(written <= 0)
+        {
+            ESP_LOGE(TAG, "Error occurred during sending: %d", errno);
+            return;
+        }
+        to_write -= written;
+    }
+    return;
+}
+
+void receive_n(const int sock, QueueHandle_t* pixel_queue, uint16_t cantidad_total)
+{
+    struct PIXEL_QUEUE pixel_nuevo;
+    size_t expected_total = cantidad_total * PIXEL_TCP_SIZE;
+    ssize_t received_total = 0;
+    ssize_t received = 0;
+
+    while(received_total < expected_total)
+    {
+        received = recv(sock, buffer8_t + received_total, expected_total - received_total, 0);
+        
+        if(received <= 0)
+        {
+            ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
+            return;
+        }
+        
+        received_total += received;
+    }
+
+    for(uint16_t i = 0; i < cantidad_total; i++)
+    {
+        pixel_nuevo.num = buffer[i].index;
+        pixel_nuevo.pixel.color.hue = buffer[i].hue;
+        pixel_nuevo.pixel.color.saturation = buffer[i].saturation;
+        pixel_nuevo.pixel.color.value = buffer[i].value;
+        pixel_nuevo.pixel.modo = buffer[i].modo;
+        pixel_nuevo.pixel.offset = buffer[i].offset;
+        pixel_nuevo.pixel.extra = buffer[i].extra;
+        memcpy(pixel_nuevo.pixel.params.raw, buffer[i].params_raw, PIXEL_PARAMS_SIZE);
+        xQueueSendToBack(*pixel_queue, (void*) &pixel_nuevo, 0);
+    }
+    return;
+}
+
+void receive_stream(const int sock)
+{
+    ssize_t received = 0;
+    ssize_t remaining;
+    struct PIXEL_TCP_STREAM pixel_nuevo;
+    uint8_t* stream8_t = (uint8_t*)&pixel_nuevo;
+
+    while(true)
+    {
+        remaining = PIXEL_TCP_STREAM_SIZE;
+        while(remaining != 0)
+        {
+            received = recv(sock, stream8_t + (PIXEL_TCP_STREAM_SIZE - remaining), remaining, 0);        
+            
+            if(received < 0)
+            {
+                ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
+                return;
+            }
+            else if(received == 0)
+                return;
+
+            remaining -= received;
+        }
+
+        if(pixeles[pixel_nuevo.index].modo != ESTATICO)
+            pixeles[pixel_nuevo.index].modo = ESTATICO;
+    
+        pixeles[pixel_nuevo.index].color.hue = pixel_nuevo.hue;
+        pixeles[pixel_nuevo.index].color.saturation = pixel_nuevo.saturation;
+        pixeles[pixel_nuevo.index].color.value = pixel_nuevo.value;
+    }
+    return;
+}
+
 void receive(const int sock, QueueHandle_t *pixel_queue)
 {
     int len;
     uint16_t received = 0;
-    struct PIXEL_QUEUE pixel_nuevo;
-    uint16_t pixel_num;
     uint16_t cantidad_total;
-    uint16_t recibidos_total;
-    uint8_t packet_lenght = TCP_PIXEL_SIZE;
-    
     do
     {
-        len = recv(sock, tcp_pixel + received, 2 - received, 0);
+        len = recv(sock, buffer8_t + received, 2 - received, 0);
         if(len <= 0)
         {
             ESP_LOGE(TAG, "Error ocurred during receiving cantidad_total: errno %d", errno);
@@ -168,119 +261,17 @@ void receive(const int sock, QueueHandle_t *pixel_queue)
         received += len;
     } while(received != 2);
 
-    cantidad_total = tcp_pixel[1] | (tcp_pixel[0] << 8);
+    cantidad_total = buffer8_t[0] | (buffer8_t[1] << 8);
     
     ESP_LOGI(TAG, "Cantidad total: %d %d", cantidad_total, pdTICKS_TO_MS(xTaskGetTickCount()));
     
     if(cantidad_total == 0)
-        packet_lenght = 5;
+        receive_stream(sock);
+    else if(cantidad_total == 1)
+        send_status(sock);
+    else
+        receive_n(sock, pixel_queue, cantidad_total);
 
-    for( recibidos_total = 0; cantidad_total == 0 || recibidos_total < cantidad_total; recibidos_total++)
-    {
-        received = 0;
-        do 
-        {
-            len = recv(sock, tcp_pixel + received, packet_lenght - received, 0);
-            if(len > 0)
-                received += len;
-
-            if (len < 0)
-            {
-                ESP_LOGE(TAG, "Error occurred during receiving: errno %d", errno);
-                goto QUIT;
-            }
-            else if (len == 0)
-            {
-                ESP_LOGW(TAG, "Connection closed");
-                goto QUIT;
-            }
-
-        } while (len > 0 && received < packet_lenght);
-
-
-        pixel_num = (tcp_pixel[0] << 8) | tcp_pixel[1];
-
-        if (pixel_num >= NUM_PIXELES) {
-            ESP_LOGW(TAG, "Invalid pixel_num: %d", pixel_num);
-            continue;
-        }
-
-        pixel_nuevo.num = pixel_num;
-
-        pixel_nuevo.pixel.color.hue        = tcp_pixel[2];
-        pixel_nuevo.pixel.color.saturation = tcp_pixel[3];
-        pixel_nuevo.pixel.color.value      = tcp_pixel[4];
-        if (cantidad_total != 0)
-        {
-            pixel_nuevo.pixel.modo             = (enum MODO)tcp_pixel[5];
-            if(pixel_nuevo.pixel.modo == APAGADO)
-                pixel_nuevo.pixel.color.value = 0;
-
-            pixel_nuevo.pixel.tiempo           = (tcp_pixel[6]  << 24) | (tcp_pixel[7]  << 16)
-                                    | (tcp_pixel[8]  <<  8) |  tcp_pixel[9];
-            pixel_nuevo.pixel.offset           = (tcp_pixel[10] << 24) | (tcp_pixel[11] << 16)
-                                    | (tcp_pixel[12] <<  8) |  tcp_pixel[13];
-            pixel_nuevo.pixel.extra            = tcp_pixel[14];
-    
-            if(pixel_nuevo.pixel.modo == RESPIRACION)
-            {
-                pixel_nuevo.pixel.params.respiracion.t_encender = (tcp_pixel[15] << 24) | (tcp_pixel[16] << 16)
-                                        | (tcp_pixel[17] <<  8) |  tcp_pixel[18];
-                pixel_nuevo.pixel.params.respiracion.t_apagar   = (tcp_pixel[19] << 24) | (tcp_pixel[20] << 16)
-                                        | (tcp_pixel[21] <<  8) |  tcp_pixel[22];
-                pixel_nuevo.pixel.params.respiracion.brillo_min = tcp_pixel[23];
-                pixel_nuevo.pixel.params.respiracion.color.hue = tcp_pixel[24];
-                pixel_nuevo.pixel.params.respiracion.color.saturation = tcp_pixel[25];
-                pixel_nuevo.pixel.params.respiracion.color.value = tcp_pixel[26];
-                pixel_nuevo.pixel.params.respiracion.t_encendido = (tcp_pixel[27] << 24) | (tcp_pixel[28] << 16)
-                                        | (tcp_pixel[29] <<  8) |  tcp_pixel[30];
-                pixel_nuevo.pixel.params.respiracion.t_apagado = (tcp_pixel[31] << 24) | (tcp_pixel[32] << 16)
-                                        | (tcp_pixel[33] <<  8) |  tcp_pixel[34];
-                pixel_nuevo.pixel.params.fade.cuatro.value   = tcp_pixel[35];
-                pixel_nuevo.pixel.params.fade.cinco.hue      = tcp_pixel[36];
-                pixel_nuevo.pixel.params.fade.cinco.saturation = tcp_pixel[37];
-                pixel_nuevo.pixel.params.fade.cinco.value    = tcp_pixel[38];
-            }
-            else 
-            {
-                pixel_nuevo.pixel.params.fade.t_fade = (tcp_pixel[15] << 24) | (tcp_pixel[16] << 16)
-                                        | (tcp_pixel[17] <<  8) |  tcp_pixel[18];
-                pixel_nuevo.pixel.params.fade.nada   = (tcp_pixel[19] << 24) | (tcp_pixel[20] << 16)
-                                        | (tcp_pixel[21] <<  8) |  tcp_pixel[22];
-                pixel_nuevo.pixel.params.fade.nada2  = tcp_pixel[23];
-        
-                pixel_nuevo.pixel.params.fade.uno.hue        = tcp_pixel[24];
-                pixel_nuevo.pixel.params.fade.uno.saturation = tcp_pixel[25];
-                pixel_nuevo.pixel.params.fade.uno.value      = tcp_pixel[26];
-                pixel_nuevo.pixel.params.fade.dos.hue        = tcp_pixel[27];
-                pixel_nuevo.pixel.params.fade.dos.saturation = tcp_pixel[28];
-                pixel_nuevo.pixel.params.fade.dos.value      = tcp_pixel[29];
-                pixel_nuevo.pixel.params.fade.tres.hue       = tcp_pixel[30];
-                pixel_nuevo.pixel.params.fade.tres.saturation= tcp_pixel[31];
-                pixel_nuevo.pixel.params.fade.tres.value     = tcp_pixel[32];
-                pixel_nuevo.pixel.params.fade.cuatro.hue     = tcp_pixel[33];
-                pixel_nuevo.pixel.params.fade.cuatro.saturation = tcp_pixel[34];
-                pixel_nuevo.pixel.params.fade.cuatro.value   = tcp_pixel[35];
-                pixel_nuevo.pixel.params.fade.cinco.hue      = tcp_pixel[36];
-                pixel_nuevo.pixel.params.fade.cinco.saturation = tcp_pixel[37];
-                pixel_nuevo.pixel.params.fade.cinco.value    = tcp_pixel[38];
-            }
-        }
-
-        if(cantidad_total == 0)
-        {
-            if(pixeles[pixel_num].modo != ESTATICO)
-                pixeles[pixel_num].modo = ESTATICO;
-            
-            pixeles[pixel_num].color.hue = pixel_nuevo.pixel.color.hue;
-            pixeles[pixel_num].color.saturation = pixel_nuevo.pixel.color.saturation;
-            pixeles[pixel_num].color.value = pixel_nuevo.pixel.color.value;
-        }
-        else
-            xQueueSendToBack(*pixel_queue, (void*) &pixel_nuevo, 0);
-    }
-
-QUIT:
     ESP_LOGI(TAG, "TERMINADO %d", pdTICKS_TO_MS(xTaskGetTickCount()));
 }
 
